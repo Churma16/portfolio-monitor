@@ -11,10 +11,12 @@ var DefaultDurationBuckets = []float64{
 	5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0, 5000.0,
 }
 
-// EventKey identifies an aggregated event by source and type.
+// EventKey identifies an aggregated event by source, type, and optional breakdown labels.
 type EventKey struct {
-	Source string
-	Type   string
+	Source  string
+	Type    string
+	Target  string
+	Project string
 }
 
 // RequestKey identifies aggregated HTTP requests by source, endpoint, and status.
@@ -73,8 +75,13 @@ func (s *Store) Record(event Event) {
 
 	s.eventsReceived++
 
-	// 1. Event count by source and type
-	typeKey := EventKey{Source: event.Source, Type: event.Type}
+	// 1. Event count by source, type, and optional metadata breakdown
+	var target, project string
+	if event.Metadata != nil {
+		target = event.Metadata["target"]
+		project = event.Metadata["project"]
+	}
+	typeKey := EventKey{Source: event.Source, Type: event.Type, Target: target, Project: project}
 	s.eventsByType[typeKey]++
 
 	// 2. HTTP Request metrics if applicable
@@ -132,7 +139,14 @@ func (s *Store) Stats() StatsSummary {
 
 	eventsCopy := make(map[string]uint64, len(s.eventsByType))
 	for k, v := range s.eventsByType {
-		eventsCopy[fmt.Sprintf("%s|%s", k.Source, k.Type)] = v
+		keyStr := fmt.Sprintf("%s|%s", k.Source, k.Type)
+		if k.Target != "" {
+			keyStr += "|" + k.Target
+		}
+		if k.Project != "" {
+			keyStr += "|" + k.Project
+		}
+		eventsCopy[keyStr] = v
 	}
 
 	reqsCopy := make(map[string]uint64, len(s.requestsTotal))
