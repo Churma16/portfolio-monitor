@@ -33,16 +33,29 @@ func FormatPrometheus(s *Store) string {
 	}
 	sort.Slice(typeKeys, func(i, j int) bool {
 		if typeKeys[i].Source == typeKeys[j].Source {
+			if typeKeys[i].Type == typeKeys[j].Type {
+				if typeKeys[i].Target == typeKeys[j].Target {
+					return typeKeys[i].Project < typeKeys[j].Project
+				}
+				return typeKeys[i].Target < typeKeys[j].Target
+			}
 			return typeKeys[i].Type < typeKeys[j].Type
 		}
 		return typeKeys[i].Source < typeKeys[j].Source
 	})
 
 	for _, k := range typeKeys {
-		source := escapeLabel(k.Source)
-		eventType := escapeLabel(k.Type)
+		var labels []string
+		labels = append(labels, fmt.Sprintf("source=\"%s\"", escapeLabel(k.Source)))
+		labels = append(labels, fmt.Sprintf("type=\"%s\"", escapeLabel(k.Type)))
+		if k.Target != "" {
+			labels = append(labels, fmt.Sprintf("target=\"%s\"", escapeLabel(k.Target)))
+		}
+		if k.Project != "" {
+			labels = append(labels, fmt.Sprintf("project=\"%s\"", escapeLabel(k.Project)))
+		}
 		count := s.eventsByType[k]
-		b.WriteString(fmt.Sprintf("portfolio_events_total{source=\"%s\",type=\"%s\"} %d\n", source, eventType, count))
+		b.WriteString(fmt.Sprintf("portfolio_events_total{%s} %d\n", strings.Join(labels, ","), count))
 	}
 	b.WriteString("\n")
 
