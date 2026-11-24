@@ -26,21 +26,23 @@ func FormatPrometheus(s *Store) string {
 	// 2. Events by type counter
 	b.WriteString("# HELP portfolio_events_total Total portfolio events by source and type\n")
 	b.WriteString("# TYPE portfolio_events_total counter\n")
-	
-	typeKeys := make([]string, 0, len(s.eventsByType))
+
+	typeKeys := make([]EventKey, 0, len(s.eventsByType))
 	for k := range s.eventsByType {
 		typeKeys = append(typeKeys, k)
 	}
-	sort.Strings(typeKeys)
+	sort.Slice(typeKeys, func(i, j int) bool {
+		if typeKeys[i].Source == typeKeys[j].Source {
+			return typeKeys[i].Type < typeKeys[j].Type
+		}
+		return typeKeys[i].Source < typeKeys[j].Source
+	})
 
 	for _, k := range typeKeys {
-		parts := strings.Split(k, "|")
-		if len(parts) == 2 {
-			source := escapeLabel(parts[0])
-			eventType := escapeLabel(parts[1])
-			count := s.eventsByType[k]
-			b.WriteString(fmt.Sprintf("portfolio_events_total{source=\"%s\",type=\"%s\"} %d\n", source, eventType, count))
-		}
+		source := escapeLabel(k.Source)
+		eventType := escapeLabel(k.Type)
+		count := s.eventsByType[k]
+		b.WriteString(fmt.Sprintf("portfolio_events_total{source=\"%s\",type=\"%s\"} %d\n", source, eventType, count))
 	}
 	b.WriteString("\n")
 
@@ -48,21 +50,25 @@ func FormatPrometheus(s *Store) string {
 	b.WriteString("# HELP portfolio_http_requests_total Total number of HTTP requests processed by portfolio backends\n")
 	b.WriteString("# TYPE portfolio_http_requests_total counter\n")
 
-	reqKeys := make([]string, 0, len(s.requestsTotal))
+	reqKeys := make([]RequestKey, 0, len(s.requestsTotal))
 	for k := range s.requestsTotal {
 		reqKeys = append(reqKeys, k)
 	}
-	sort.Strings(reqKeys)
+	sort.Slice(reqKeys, func(i, j int) bool {
+		if reqKeys[i].Source == reqKeys[j].Source {
+			if reqKeys[i].Endpoint == reqKeys[j].Endpoint {
+				return reqKeys[i].StatusCode < reqKeys[j].StatusCode
+			}
+			return reqKeys[i].Endpoint < reqKeys[j].Endpoint
+		}
+		return reqKeys[i].Source < reqKeys[j].Source
+	})
 
 	for _, k := range reqKeys {
-		parts := strings.Split(k, "|")
-		if len(parts) == 3 {
-			source := escapeLabel(parts[0])
-			endpoint := escapeLabel(parts[1])
-			status := escapeLabel(parts[2])
-			count := s.requestsTotal[k]
-			b.WriteString(fmt.Sprintf("portfolio_http_requests_total{source=\"%s\",endpoint=\"%s\",status=\"%s\"} %d\n", source, endpoint, status, count))
-		}
+		source := escapeLabel(k.Source)
+		endpoint := escapeLabel(k.Endpoint)
+		count := s.requestsTotal[k]
+		b.WriteString(fmt.Sprintf("portfolio_http_requests_total{source=\"%s\",endpoint=\"%s\",status=\"%d\"} %d\n", source, endpoint, k.StatusCode, count))
 	}
 	b.WriteString("\n")
 
@@ -70,33 +76,35 @@ func FormatPrometheus(s *Store) string {
 	b.WriteString("# HELP portfolio_http_request_duration_seconds HTTP request duration in seconds\n")
 	b.WriteString("# TYPE portfolio_http_request_duration_seconds histogram\n")
 
-	durKeys := make([]string, 0, len(s.durationSumMs))
+	durKeys := make([]DurationKey, 0, len(s.durationSumMs))
 	for k := range s.durationSumMs {
 		durKeys = append(durKeys, k)
 	}
-	sort.Strings(durKeys)
+	sort.Slice(durKeys, func(i, j int) bool {
+		if durKeys[i].Source == durKeys[j].Source {
+			return durKeys[i].Endpoint < durKeys[j].Endpoint
+		}
+		return durKeys[i].Source < durKeys[j].Source
+	})
 
 	for _, k := range durKeys {
-		parts := strings.Split(k, "|")
-		if len(parts) == 2 {
-			source := escapeLabel(parts[0])
-			endpoint := escapeLabel(parts[1])
-			sumSeconds := s.durationSumMs[k] / 1000.0
-			count := s.durationCount[k]
+		source := escapeLabel(k.Source)
+		endpoint := escapeLabel(k.Endpoint)
+		sumSeconds := s.durationSumMs[k] / 1000.0
+		count := s.durationCount[k]
 
-			buckets := s.durationBucket[k]
-			for _, le := range DefaultDurationBuckets {
-				bucketCount := uint64(0)
-				if buckets != nil {
-					bucketCount = buckets[le]
-				}
-				leSeconds := le / 1000.0
-				b.WriteString(fmt.Sprintf("portfolio_http_request_duration_seconds_bucket{source=\"%s\",endpoint=\"%s\",le=\"%.3f\"} %d\n", source, endpoint, leSeconds, bucketCount))
+		buckets := s.durationBucket[k]
+		for _, le := range DefaultDurationBuckets {
+			bucketCount := uint64(0)
+			if buckets != nil {
+				bucketCount = buckets[le]
 			}
-			b.WriteString(fmt.Sprintf("portfolio_http_request_duration_seconds_bucket{source=\"%s\",endpoint=\"%s\",le=\"+Inf\"} %d\n", source, endpoint, count))
-			b.WriteString(fmt.Sprintf("portfolio_http_request_duration_seconds_sum{source=\"%s\",endpoint=\"%s\"} %.6f\n", source, endpoint, sumSeconds))
-			b.WriteString(fmt.Sprintf("portfolio_http_request_duration_seconds_count{source=\"%s\",endpoint=\"%s\"} %d\n", source, endpoint, count))
+			leSeconds := le / 1000.0
+			b.WriteString(fmt.Sprintf("portfolio_http_request_duration_seconds_bucket{source=\"%s\",endpoint=\"%s\",le=\"%.3f\"} %d\n", source, endpoint, leSeconds, bucketCount))
 		}
+		b.WriteString(fmt.Sprintf("portfolio_http_request_duration_seconds_bucket{source=\"%s\",endpoint=\"%s\",le=\"+Inf\"} %d\n", source, endpoint, count))
+		b.WriteString(fmt.Sprintf("portfolio_http_request_duration_seconds_sum{source=\"%s\",endpoint=\"%s\"} %.6f\n", source, endpoint, sumSeconds))
+		b.WriteString(fmt.Sprintf("portfolio_http_request_duration_seconds_count{source=\"%s\",endpoint=\"%s\"} %d\n", source, endpoint, count))
 	}
 
 	return b.String()
@@ -106,5 +114,6 @@ func escapeLabel(s string) string {
 	s = strings.ReplaceAll(s, "\\", "\\\\")
 	s = strings.ReplaceAll(s, "\"", "\\\"")
 	s = strings.ReplaceAll(s, "\n", "\\n")
+	s = strings.ReplaceAll(s, "\r", "\\r")
 	return s
 }

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"log"
@@ -67,7 +68,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		authHeader := r.Header.Get("Authorization")
 		expected := "Bearer " + s.authToken
 		if authHeader != expected {
-			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+			s.writeJSONError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
 	}
@@ -76,35 +77,35 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		http.Error(w, `{"error":"payload too large or unreadable"}`, http.StatusBadRequest)
+		s.writeJSONError(w, http.StatusBadRequest, "payload too large or unreadable")
 		return
 	}
 
-	trimmed := strings.TrimSpace(string(body))
-	if trimmed == "" {
-		http.Error(w, `{"error":"empty request body"}`, http.StatusBadRequest)
+	trimmed := bytes.TrimSpace(body)
+	if len(trimmed) == 0 {
+		s.writeJSONError(w, http.StatusBadRequest, "empty request body")
 		return
 	}
 
 	var events []monitor.Event
-	if strings.HasPrefix(trimmed, "[") {
+	if bytes.HasPrefix(trimmed, []byte("[")) {
 		// Array of events
-		if err := json.Unmarshal([]byte(trimmed), &events); err != nil {
-			http.Error(w, `{"error":"invalid JSON array"}`, http.StatusBadRequest)
+		if err := json.Unmarshal(trimmed, &events); err != nil {
+			s.writeJSONError(w, http.StatusBadRequest, "invalid JSON array")
 			return
 		}
 	} else {
 		// Single event
 		var single monitor.Event
-		if err := json.Unmarshal([]byte(trimmed), &single); err != nil {
-			http.Error(w, `{"error":"invalid JSON object"}`, http.StatusBadRequest)
+		if err := json.Unmarshal(trimmed, &single); err != nil {
+			s.writeJSONError(w, http.StatusBadRequest, "invalid JSON object")
 			return
 		}
 		events = []monitor.Event{single}
 	}
 
 	if len(events) == 0 {
-		http.Error(w, `{"error":"no events provided"}`, http.StatusBadRequest)
+		s.writeJSONError(w, http.StatusBadRequest, "no events provided")
 		return
 	}
 
@@ -114,8 +115,8 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusBadRequest)
 			_ = json.NewEncoder(w).Encode(map[string]any{
-				"error":   "validation failed: " + err.Error(),
-				"index":   i,
+				"error": "validation failed: " + err.Error(),
+				"index": i,
 			})
 			return
 		}
@@ -131,6 +132,14 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"status": "recorded",
 		"count":  len(events),
+	})
+}
+
+func (s *Server) writeJSONError(w http.ResponseWriter, statusCode int, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"error": message,
 	})
 }
 
@@ -162,7 +171,7 @@ func (s *Server) recoverMiddleware(next http.Handler) http.Handler {
 		defer func() {
 			if rec := recover(); rec != nil {
 				log.Printf("[PANIC] %s %s: %v", r.Method, r.URL.Path, rec)
-				http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
+				s.writeJSONError(w, http.StatusInternalServerError, "internal server error")
 			}
 		}()
 		next.ServeHTTP(w, r)

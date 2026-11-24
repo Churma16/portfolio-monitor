@@ -11,6 +11,25 @@ var DefaultDurationBuckets = []float64{
 	5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0, 5000.0,
 }
 
+// EventKey identifies an aggregated event by source and type.
+type EventKey struct {
+	Source string
+	Type   string
+}
+
+// RequestKey identifies aggregated HTTP requests by source, endpoint, and status.
+type RequestKey struct {
+	Source     string
+	Endpoint   string
+	StatusCode int
+}
+
+// DurationKey identifies duration metrics by source and endpoint.
+type DurationKey struct {
+	Source   string
+	Endpoint string
+}
+
 // Store maintains thread-safe aggregated telemetry and Prometheus metrics in memory.
 type Store struct {
 	mu sync.RWMutex
@@ -18,12 +37,12 @@ type Store struct {
 	startTime      time.Time
 	eventsReceived uint64
 
-	// Metrics aggregates
-	eventsByType   map[string]uint64 // key: "source|type"
-	requestsTotal  map[string]uint64 // key: "source|endpoint|status"
-	durationSumMs  map[string]float64// key: "source|endpoint"
-	durationCount  map[string]uint64 // key: "source|endpoint"
-	durationBucket map[string]map[float64]uint64 // key: "source|endpoint" -> bucket_le -> count
+	// Metrics aggregates using native hashable struct keys (immune to delimiter collision)
+	eventsByType   map[EventKey]uint64
+	requestsTotal  map[RequestKey]uint64
+	durationSumMs  map[DurationKey]float64
+	durationCount  map[DurationKey]uint64
+	durationBucket map[DurationKey]map[float64]uint64
 
 	// Ring buffer of recent events for human/API inspection
 	recentEvents   []Event
@@ -37,11 +56,11 @@ func NewStore(maxRecentEvents int) *Store {
 	}
 	return &Store{
 		startTime:      time.Now().UTC(),
-		eventsByType:   make(map[string]uint64),
-		requestsTotal:  make(map[string]uint64),
-		durationSumMs:  make(map[string]float64),
-		durationCount:  make(map[string]uint64),
-		durationBucket: make(map[string]map[float64]uint64),
+		eventsByType:   make(map[EventKey]uint64),
+		requestsTotal:  make(map[RequestKey]uint64),
+		durationSumMs:  make(map[DurationKey]float64),
+		durationCount:  make(map[DurationKey]uint64),
+		durationBucket: make(map[DurationKey]map[float64]uint64),
 		recentEvents:   make([]Event, 0, maxRecentEvents),
 		maxRecent:      maxRecentEvents,
 	}
@@ -55,7 +74,7 @@ func (s *Store) Record(event Event) {
 	s.eventsReceived++
 
 	// 1. Event count by source and type
-	typeKey := fmt.Sprintf("%s|%s", event.Source, event.Type)
+	typeKey := EventKey{Source: event.Source, Type: event.Type}
 	s.eventsByType[typeKey]++
 
 	// 2. HTTP Request metrics if applicable
@@ -69,11 +88,11 @@ func (s *Store) Record(event Event) {
 			status = 200
 		}
 
-		reqKey := fmt.Sprintf("%s|%s|%d", event.Source, endpoint, status)
+		reqKey := RequestKey{Source: event.Source, Endpoint: endpoint, StatusCode: status}
 		s.requestsTotal[reqKey]++
 
 		if event.DurationMs > 0 {
-			durKey := fmt.Sprintf("%s|%s", event.Source, endpoint)
+			durKey := DurationKey{Source: event.Source, Endpoint: endpoint}
 			s.durationSumMs[durKey] += event.DurationMs
 			s.durationCount[durKey]++
 
@@ -88,9 +107,10 @@ func (s *Store) Record(event Event) {
 		}
 	}
 
-	// 3. Append to ring buffer
+	// 3. Append to ring buffer using in-place shift to avoid slice reallocation churn
 	if len(s.recentEvents) >= s.maxRecent {
-		s.recentEvents = append(s.recentEvents[1:], event)
+		copy(s.recentEvents, s.recentEvents[1:])
+		s.recentEvents[len(s.recentEvents)-1] = event
 	} else {
 		s.recentEvents = append(s.recentEvents, event)
 	}
@@ -112,12 +132,12 @@ func (s *Store) Stats() StatsSummary {
 
 	eventsCopy := make(map[string]uint64, len(s.eventsByType))
 	for k, v := range s.eventsByType {
-		eventsCopy[k] = v
+		eventsCopy[fmt.Sprintf("%s|%s", k.Source, k.Type)] = v
 	}
 
 	reqsCopy := make(map[string]uint64, len(s.requestsTotal))
 	for k, v := range s.requestsTotal {
-		reqsCopy[k] = v
+		reqsCopy[fmt.Sprintf("%s|%s|%d", k.Source, k.Endpoint, k.StatusCode)] = v
 	}
 
 	recentCopy := make([]Event, len(s.recentEvents))
@@ -139,10 +159,10 @@ func (s *Store) Reset() {
 
 	s.startTime = time.Now().UTC()
 	s.eventsReceived = 0
-	s.eventsByType = make(map[string]uint64)
-	s.requestsTotal = make(map[string]uint64)
-	s.durationSumMs = make(map[string]float64)
-	s.durationCount = make(map[string]uint64)
-	s.durationBucket = make(map[string]map[float64]uint64)
+	s.eventsByType = make(map[EventKey]uint64)
+	s.requestsTotal = make(map[RequestKey]uint64)
+	s.durationSumMs = make(map[DurationKey]float64)
+	s.durationCount = make(map[DurationKey]uint64)
+	s.durationBucket = make(map[DurationKey]map[float64]uint64)
 	s.recentEvents = make([]Event, 0, s.maxRecent)
 }

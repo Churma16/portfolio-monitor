@@ -16,7 +16,12 @@ func TestStore_RecordAndStats(t *testing.T) {
 	store.Record(ev1)
 	store.Record(ev2)
 	store.Record(ev3)
+	// Verify capacity before and after exceeding maxRecent
+	initialCap := cap(store.recentEvents)
 	store.Record(ev4)
+	if cap(store.recentEvents) != initialCap {
+		t.Errorf("expected slice capacity to remain stable (%d), but changed to %d", initialCap, cap(store.recentEvents))
+	}
 
 	stats := store.Stats()
 	if stats.TotalEvents != 4 {
