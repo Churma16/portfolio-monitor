@@ -1,0 +1,14 @@
+# Binaries
+/monitor
+*.exe
+*.test
+*.out
+
+# IDE and OS
+.idea/
+.vscode/
+.DS_Store
+*.swp
+
+# Environment
+.env
